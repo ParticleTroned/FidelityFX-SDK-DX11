@@ -22,6 +22,11 @@
 
 cmake_minimum_required(VERSION 3.17)
 
+# Select depfile handling before backend functions capture the policies.
+if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
+
 # Set configuration types based on what we are building for
 if (NOT FFX_API_CUSTOM)
 	message(STATUS "Building FidelityFX SDK with DX11 & DX12 & VK backends")

@@ -103,6 +103,8 @@ void ComputeBaseAccumulationWeight(const AccumulationPassCommonParams params, FF
 
 void InitPassData(FfxInt32x2 iPxHrPos, FFX_PARAMETER_INOUT AccumulationPassCommonParams params, FFX_PARAMETER_INOUT AccumulationPassData data)
 {
+    // FXC requires every field to be initialized before an inout struct call.
+    params = (AccumulationPassCommonParams)0;
     // Init constant params
     params.iPxHrPos                     = iPxHrPos;
     const FfxFloat32x2 fHrUv            = (iPxHrPos + 0.5f) / UpscaleSize();
@@ -113,7 +115,7 @@ void InitPassData(FfxInt32x2 iPxHrPos, FFX_PARAMETER_INOUT AccumulationPassCommo
     params.fMotionVector                = GetMotionVector(iPxHrPos, fHrUv);
     params.f4KVelocity                  = Get4KVelocity(params.fMotionVector);
 
-    ComputeReprojectedUVs(params, params.fReprojectedHrUv, params.bIsExistingSample);
+    ComputeReprojectedUVs(params);
 
     const FfxFloat32x2 fLumaInstabilityUv_HW  = ClampUv(fHrUv, RenderSize(), MaxRenderSize());
     params.fLumaInstabilityFactor       = SampleLumaInstability(fLumaInstabilityUv_HW);

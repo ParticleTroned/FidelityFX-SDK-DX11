@@ -73,6 +73,7 @@ typedef struct BackendContext_DX11 {
 
     FfxGpuJobDescription*   pGpuJobs;
     uint32_t                gpuJobCount;
+    FfxErrorCode            gpuJobError;
 
     ID3D11Buffer*           constantBufferResource[FFX_MAX_NUM_CONST_BUFFERS];
     uint32_t                constantBufferSize[FFX_MAX_NUM_CONST_BUFFERS];
@@ -176,7 +177,7 @@ FfxCommandList ffxGetCommandListDX11(ID3D11DeviceContext* deviceContext)
 }
 
 // register a DX11 resource to the backend
-FfxResource ffxGetResourceDX11_Fsr31(ID3D11Resource* dx11Resource,
+FfxResource ffxGetResourceDX11_Fsr31(const ID3D11Resource* dx11Resource,
     FfxResourceDescription                     ffxResDescription,
     wchar_t const*                             ffxResName,
     FfxResourceStates                          state /*=FFX_RESOURCE_STATE_COMPUTE_READ*/)
@@ -842,6 +843,7 @@ FfxErrorCode DestroyBackendContextDX11(FfxInterface* backendInterface, FfxUInt32
             }
         }
         backendContext->gpuJobCount = 0;
+        backendContext->gpuJobError = FFX_OK;
 
         if (backendContext->deviceContext1 != NULL) {
             backendContext->deviceContext1->Release();
@@ -1610,35 +1612,33 @@ FfxErrorCode ScheduleGpuJobDX11(
 
     BackendContext_DX11* backendContext = (BackendContext_DX11*)backendInterface->scratchBuffer;
 
-    FFX_ASSERT(backendContext->gpuJobCount < FFX_MAX_GPU_JOBS);
-
-    backendContext->pGpuJobs[backendContext->gpuJobCount] = *job;
+    FFX_RETURN_ON_ERROR(backendContext->gpuJobError == FFX_OK, backendContext->gpuJobError);
+    if (backendContext->gpuJobCount >= FFX_MAX_GPU_JOBS)
+        return backendContext->gpuJobError = FFX_ERROR_INSUFFICIENT_MEMORY;
 
     if (job->jobType == FFX_GPU_JOB_COMPUTE) {
-
-        // needs to copy SRVs and UAVs in case they are on the stack only
-        FfxComputeJobDescription* computeJob = &backendContext->pGpuJobs[backendContext->gpuJobCount].computeJobDescriptor;
-        const uint32_t numConstBuffers = job->computeJobDescriptor.pipeline.constCount;
-        for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex< numConstBuffers; ++currentRootConstantIndex)
-        {
-            computeJob->cbs[currentRootConstantIndex].num32BitEntries = job->computeJobDescriptor.cbs[currentRootConstantIndex].num32BitEntries;
-            memcpy(computeJob->cbs[currentRootConstantIndex].data, job->computeJobDescriptor.cbs[currentRootConstantIndex].data, computeJob->cbs[currentRootConstantIndex].num32BitEntries*sizeof(uint32_t));
+        const auto& compute = job->computeJobDescriptor;
+        if (compute.pipeline.constCount > FFX_MAX_NUM_CONST_BUFFERS)
+            return backendContext->gpuJobError = FFX_ERROR_INVALID_SIZE;
+        for (uint32_t index = 0; index < compute.pipeline.constCount; ++index) {
+            if (!compute.cbs[index].num32BitEntries || compute.cbs[index].num32BitEntries > FFX_MAX_CONST_SIZE)
+                return backendContext->gpuJobError = FFX_ERROR_INVALID_SIZE;
+            if (compute.pipeline.constantBufferBindings[index].slotIndex >= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
+                return backendContext->gpuJobError = FFX_ERROR_OUT_OF_RANGE;
         }
     }
 
-    backendContext->gpuJobCount++;
+    // Constant data is inline; copying the job owns all of its constant blocks.
+    backendContext->pGpuJobs[backendContext->gpuJobCount++] = *job;
 
     return FFX_OK;
 }
 
 static FfxErrorCode uploadConstantBuffers(BackendContext_DX11* backendContext, const FfxComputeJobDescription& job)
 {
-    FFX_RETURN_ON_ERROR(job.pipeline.constCount <= FFX_MAX_NUM_CONST_BUFFERS, FFX_ERROR_INVALID_SIZE);
     uint32_t sizes[FFX_MAX_NUM_CONST_BUFFERS] = {};
     uint32_t totalSize = 0;
     for (uint32_t index = 0; index < job.pipeline.constCount; ++index) {
-        FFX_RETURN_ON_ERROR(job.cbs[index].num32BitEntries > 0 && job.cbs[index].num32BitEntries <= FFX_MAX_CONST_SIZE,
-            FFX_ERROR_INVALID_SIZE);
         sizes[index] = FFX_ALIGN_UP(job.cbs[index].num32BitEntries * sizeof(uint32_t), 256);
         totalSize += sizes[index];
     }
@@ -1670,7 +1670,7 @@ static FfxErrorCode uploadConstantBuffers(BackendContext_DX11* backendContext, c
         deviceContext->Unmap(backendContext->constantBufferResource[0], 0);
         backendContext->constantBufferOffset[0] = offset;
         for (uint32_t index = 0; index < job.pipeline.constCount; ++index)
-            backendContext->deviceContext1->CSSetConstantBuffers1(index, 1, &backendContext->constantBufferResource[0], &first[index], &count[index]);
+            backendContext->deviceContext1->CSSetConstantBuffers1(job.pipeline.constantBufferBindings[index].slotIndex, 1, &backendContext->constantBufferResource[0], &first[index], &count[index]);
     } else {
         for (uint32_t index = 0; index < job.pipeline.constCount; ++index) {
             if (backendContext->constantBufferSize[index] < sizes[index]) {
@@ -1693,7 +1693,7 @@ static FfxErrorCode uploadConstantBuffers(BackendContext_DX11* backendContext, c
                 D3D11_MAP_WRITE_DISCARD, 0, &mapped)), FFX_ERROR_BACKEND_API_ERROR);
             memcpy(mapped.pData, job.cbs[index].data, job.cbs[index].num32BitEntries * sizeof(uint32_t));
             deviceContext->Unmap(backendContext->constantBufferResource[index], 0);
-            deviceContext->CSSetConstantBuffers(index, 1, &backendContext->constantBufferResource[index]);
+            deviceContext->CSSetConstantBuffers(job.pipeline.constantBufferBindings[index].slotIndex, 1, &backendContext->constantBufferResource[index]);
         }
     }
     return FFX_OK;
@@ -1895,7 +1895,12 @@ FfxErrorCode ExecuteGpuJobsDX11(
 
     BackendContext_DX11* backendContext = (BackendContext_DX11*)backendInterface->scratchBuffer;
 
-    FfxErrorCode errorCode = FFX_OK;
+    FfxErrorCode errorCode = backendContext->gpuJobError;
+    backendContext->gpuJobError = FFX_OK;
+    if (errorCode != FFX_OK) {
+        backendContext->gpuJobCount = 0;
+        return errorCode;
+    }
 
     // execute all GpuJobs
     for (uint32_t currentGpuJobIndex = 0; currentGpuJobIndex < backendContext->gpuJobCount; ++currentGpuJobIndex) {

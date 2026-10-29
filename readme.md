@@ -1,6 +1,41 @@
 ## Build libs
 Run `BuildFidelityFXDX11.bat` from the `sdk` folder. Compiled libs are located in `sdk\bin`.
 
+## DX11 upscaling compatibility
+
+This fork carries the published FSR 3.1.6 upscaling algorithm from
+[AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0)
+while preserving its DX11 backend and host ABI. Reprojection updates the
+accumulation parameters in place, and both history-sampling precision paths
+use the previous frame's upscale dimensions. The DX11 shader initialization
+and resource bindings remain compatible with Shader Model 5.
+
+Applications can keep this static DX11 implementation alongside AMD's SDK
+2.4 runtime DLLs as an independent FSR3 path or fallback. It does not expose
+the SDK 2.4 DLL provider API, implement FSR4, or update frame generation.
+The FSR3 and FSR3 upscaler version macros report the upscaling algorithm
+level, 3.1.6; the backend API remains the fork's existing interface.
+
+## DX11 regression tests
+
+Enable `FFX_BUILD_DX11_TESTS` in a configured DX11 FSR3 static-library build
+to run the backend contract and upscaler tests. For example, with the build
+directory at `build/dx11`:
+
+```sh
+cmake -S sdk -B build/dx11 -DFFX_BUILD_DX11_TESTS=ON
+cmake --build build/dx11 --config Release --target dx11_backend_test fsr3_dx11_test
+ctest --test-dir build/dx11 -C Release --output-on-failure
+```
+
+The tests cover queue bounds, constant-buffer snapshots and shader slots,
+ring wrapping, the separate-buffer upload path, injected failures and
+cleanup, automatic history reset after failed dispatch, and two-context
+FSR3 output through resolution changes. WARP is
+used by CTest; `fsr3_dx11_test` also accepts a DXGI adapter index instead of
+`warp`, followed optionally by `fp32`. The backend contract test requires
+the D3D11 debug layer and reports a skip if it is unavailable.
+
 <h1>Welcome to the FidelityFX Super Resolution 3 SDK</h1>
 
 ![alt text](/docs/media/fidelityfxsdk-logo-rescaled.png)

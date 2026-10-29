@@ -53,18 +53,18 @@ FfxFloat32x2 GetMotionVector(FfxInt32x2 iPxHrPos, FfxFloat32x2 fHrUv)
     return fDilatedMotionVector;
 }
 
-void ComputeReprojectedUVs(const AccumulationPassCommonParams params, FFX_PARAMETER_OUT FfxFloat32x2 fReprojectedHrUv, FFX_PARAMETER_OUT FfxBoolean bIsExistingSample)
+void ComputeReprojectedUVs(FFX_PARAMETER_INOUT AccumulationPassCommonParams params)
 {
-    fReprojectedHrUv = params.fHrUv + params.fMotionVector;
+    params.fReprojectedHrUv = params.fHrUv + params.fMotionVector;
 
-    bIsExistingSample = IsUvInside(fReprojectedHrUv);
+    params.bIsExistingSample = IsUvInside(params.fReprojectedHrUv);
 }
 
 void ReprojectHistoryColor(const AccumulationPassCommonParams params, FFX_PARAMETER_INOUT AccumulationPassData data)
 
 {
 #if FFX_HALF && FFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF
-    const FfxFloat32x4 fReprojectedHistory = FfxFloat32x4(HistorySample16(params.fReprojectedHrUv, UpscaleSize()));
+    const FfxFloat32x4 fReprojectedHistory = FfxFloat32x4(HistorySample16(params.fReprojectedHrUv, PreviousFrameUpscaleSize()));
 #else
     const FfxFloat32x4 fReprojectedHistory = HistorySample(params.fReprojectedHrUv, PreviousFrameUpscaleSize());
 #endif

@@ -812,6 +812,17 @@ static void scheduleDispatch(FfxFsr3UpscalerContext_Private* context, const FfxF
     context->contextDescription.backendInterface.fpScheduleGpuJob(&context->contextDescription.backendInterface, &dispatchJob);
 }
 
+static FfxErrorCode executeGpuJobsAndReleaseResources(FfxFsr3UpscalerContext_Private* context, FfxCommandList commandList)
+{
+    auto& backend = context->contextDescription.backendInterface;
+    const FfxErrorCode executeResult = backend.fpExecuteGpuJobs(&backend, commandList);
+    // Dynamic registrations must be released even when dispatch fails.
+    const FfxErrorCode releaseResult = backend.fpUnregisterResources(&backend, commandList, context->effectContextId);
+    if (executeResult != FFX_OK || releaseResult != FFX_OK)
+        context->firstExecution = true;
+    return executeResult != FFX_OK ? executeResult : releaseResult;
+}
+
 FFX_API FfxErrorCode ffxFsr3UpscalerGetSharedResourceDescriptions(FfxFsr3UpscalerContext* context, FfxFsr3UpscalerSharedResourceDescriptions* SharedResources)
 {
     FFX_RETURN_ON_ERROR(
@@ -1134,12 +1145,7 @@ static FfxErrorCode fsr3upscalerDispatch(FfxFsr3UpscalerContext_Private* context
     // Fsr3UpscalerMaxQueuedFrames must be an even number.
     FFX_STATIC_ASSERT((FSR3UPSCALER_MAX_QUEUED_FRAMES & 1) == 0);
 
-    context->contextDescription.backendInterface.fpExecuteGpuJobs(&context->contextDescription.backendInterface, commandList);
-
-    // release dynamic resources
-    context->contextDescription.backendInterface.fpUnregisterResources(&context->contextDescription.backendInterface, commandList, context->effectContextId);
-
-    return FFX_OK;
+    return executeGpuJobsAndReleaseResources(context, commandList);
 }
 
 FFX_API FfxErrorCode ffxFsr3UpscalerContextCreate(FfxFsr3UpscalerContext* context, const FfxFsr3UpscalerContextDescription* contextDescription)
@@ -1376,12 +1382,7 @@ FfxErrorCode ffxFsr3UpscalerContextGenerateReactiveMask(FfxFsr3UpscalerContext* 
 
     contextPrivate->contextDescription.backendInterface.fpScheduleGpuJob(&contextPrivate->contextDescription.backendInterface, &dispatchJob);
 
-    contextPrivate->contextDescription.backendInterface.fpExecuteGpuJobs(&contextPrivate->contextDescription.backendInterface, commandList);
-
-    // release dynamic resources
-    contextPrivate->contextDescription.backendInterface.fpUnregisterResources(&contextPrivate->contextDescription.backendInterface, commandList, contextPrivate->effectContextId);
-
-    return FFX_OK;
+    return executeGpuJobsAndReleaseResources(contextPrivate, commandList);
 }
 
 FFX_API FfxErrorCode ffxFsr3UpscalerSetConstant(FfxFsr3UpscalerContext* context, FfxFsr3UpscalerConfigureKey key, void* valuePtr)
